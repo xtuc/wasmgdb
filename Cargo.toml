@@ -1,0 +1,17 @@
+[package]
+name = "wasmgdb"
+version = "0.1.0"
+edition = "2021"
+description = "gdb for WebAssembly"
+authors = ["Sven Sauleau <sven@cloudflare.com>"]
+license = "MIT"
+keywords = ["wasm", "gdb", "debug", "coredump", "stack"]
+repository = "https://github.com/xtuc/wasmgdb"
+
+
+[dependencies]
+gimli = "0.26.2"
+wasm-edit = "0.1.2"
+colored = "2.0.0"
+env_logger = "0.9.1"
+log = "0.4.17"
