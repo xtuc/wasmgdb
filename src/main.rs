@@ -1,5 +1,8 @@
 // https://dwarfstd.org/doc/DWARF5.pdf
 use colored::Colorize;
+use std::ffi::CString;
+use std::os::raw::c_char;
+
 use gimli::ReaderOffset;
 use log::{debug, error, info, warn};
 use nom::branch::alt;
@@ -240,15 +243,14 @@ fn print_frame<'a, R: gimli::Reader>(ctx: &Context<R>, frame: &StackFrame) -> Re
                     "???".to_owned()
                 };
 
-                if let Some(param_type) = ctx.types.get(&param.type_offset.unwrap().0.into_u64()) {
-                    let addr = get_param_addr(frame, &func, param).unwrap();
-                    let value = read(ctx.coredump, addr, param_type.size_of()).unwrap();
-                    let value = fmt_value(param_type, value);
+                // TODO: not always 4 bytes, right?
+                let size_of = 4;
 
-                    format!("{}={}", param_name.green(), value)
-                } else {
-                    format!("{}=<param has no type>", param_name.green())
-                }
+                let addr = get_param_addr(frame, &func, param).unwrap();
+                let bytes = read(ctx.coredump, addr, size_of).unwrap();
+                let value = format!("0x{}", hex::encode(&bytes));
+
+                format!("{}={}", param_name.green(), value)
             })
             .collect::<Vec<String>>()
             .join(", ");
@@ -351,7 +353,7 @@ fn run_command<R: gimli::Reader>(
             backtrace(ctx, stack_frames)?;
         }
 
-        Command::PrintDeref(what) => {
+        Command::PrintDeref(_format, what) => {
             if let Some(variable) = ctx.variables.get(what) {
                 let selected_frame = ctx
                     .selected_frame
@@ -381,7 +383,7 @@ fn run_command<R: gimli::Reader>(
             }
         }
 
-        Command::Print(what) => {
+        Command::Print(format, what) => {
             if let Some(variable) = ctx.variables.get(what) {
                 let selected_frame = ctx
                     .selected_frame
@@ -398,8 +400,28 @@ fn run_command<R: gimli::Reader>(
 
                 let addr = get_addr(&selected_frame, &func, variable.location.as_ref().unwrap())?;
 
-                let out = print_value(&ctx, addr, value_type)?;
-                println!("{}: {}", what, out);
+                match format {
+                    PrintFormat::String => {
+                        let ptr = read_ptr(ctx.coredump, addr)?;
+
+                        let mut addr = ptr;
+                        let mut out = "".to_owned();
+                        loop {
+                            let v = ctx.coredump[addr as usize];
+                            if v == 0 {
+                                break;
+                            }
+                            write!(out, "{}", v as char)?;
+                            addr += 1;
+                        }
+
+                        println!("{} ({} char(s)) = {}", what, out.len(), out);
+                    }
+                    PrintFormat::None => {
+                        let out = print_value(&ctx, addr, value_type)?;
+                        println!("{}: {}", what, out);
+                    }
+                }
             } else {
                 error!("variable {} not found", what);
             }
@@ -424,8 +446,13 @@ enum Command<'a> {
     Unknown,
     Backtrace,
     SelectFrame(usize),
-    Print(&'a str),
-    PrintDeref(&'a str),
+    Print(PrintFormat, &'a str),
+    PrintDeref(PrintFormat, &'a str),
+}
+
+enum PrintFormat {
+    None,
+    String,
 }
 
 fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>> {
@@ -434,13 +461,24 @@ fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>> {
     Ok(match word {
         "bt" => (input, Command::Backtrace),
         "p" => {
+            let (input, format) = opt(tag("/s"))(input)?;
+
+            let format = if let Some(format) = format {
+                match format {
+                    "/s" => PrintFormat::String,
+                    e => unimplemented!("unknow format {}", e),
+                }
+            } else {
+                PrintFormat::None
+            };
+
             let what = tuple((opt(tag("*")), alpha1));
             let (input, (deref, what)) = preceded(tag(" "), what)(input)?;
 
             if deref.is_some() {
-                (input, Command::PrintDeref(what))
+                (input, Command::PrintDeref(format, what))
             } else {
-                (input, Command::Print(what))
+                (input, Command::Print(format, what))
             }
         }
         "f" => {
@@ -735,27 +773,6 @@ fn backtrace<R: gimli::Reader>(
     }
 
     Ok(())
-}
-
-fn fmt_value(type_: &Type, value: &[u8]) -> String {
-    let size_of = type_.size_of();
-    assert_eq!(size_of as usize, value.len());
-    match &type_.inner {
-        TypeEnum::Ptr(_) | TypeEnum::Base => match size_of {
-            4 => {
-                let value = u32::from_le_bytes(value.try_into().unwrap());
-                format!("0x{:0width$x}", value, width = size_of as usize)
-            }
-            8 => {
-                let value = u64::from_le_bytes(value.try_into().unwrap());
-                format!("0x{:0width$x}", value, width = size_of as usize)
-            }
-            n => format!("<base type size={}>", n),
-        },
-        TypeEnum::Struct(_) => {
-            format!("<struct>")
-        }
-    }
 }
 
 /// Get the absolute addr of a member in memory

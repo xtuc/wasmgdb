@@ -33,3 +33,8 @@ Requires to select the frame with `f` first.
 
 Inspect the content of a variable after dereferencing it.
 Requires to select the frame with `f` first.
+
+#### `p/s <var-name>`
+
+Print the variable as string.
+Requires to select the frame with `f` first.
