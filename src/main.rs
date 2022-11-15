@@ -1,13 +1,22 @@
 // https://dwarfstd.org/doc/DWARF5.pdf
 use colored::Colorize;
 use gimli::ReaderOffset;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
+use nom::branch::alt;
+use nom::bytes::complete::tag;
+use nom::character::complete::alpha1;
+use nom::character::complete::digit1;
+use nom::combinator::opt;
+use nom::sequence::preceded;
+use nom::sequence::tuple;
+use nom::IResult;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
+use std::io::Write as IoWrite;
 use std::sync::Arc;
 use std::{borrow, env};
 
@@ -19,7 +28,7 @@ type BoxError = Box<dyn std::error::Error>;
 // The stack frame relies on Wasm funcidx instead of instruction binary offset
 // because it has been buggy and hard to debug in the past.
 // TODO: eventually switch back to code offsets.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct StackFrame {
     funcidx: u32,
     binary_name: String,
@@ -39,14 +48,56 @@ impl StackFrame {
     }
 }
 
-fn get_param_value<R: gimli::Reader>(
-    coredump: &[u8],
+fn print_value<R: gimli::Reader>(
+    ctx: &Context<R>,
+    addr: u32,
+    type_: &Type,
+) -> Result<String, BoxError> {
+    match &type_.inner {
+        TypeEnum::Ptr(target_type) => Ok(format!("*{} = 0x{:x}", target_type.name.yellow(), addr)),
+        TypeEnum::Base => {
+            let size_of = type_.size_of();
+            let mut bytes = read(ctx.coredump, addr, size_of)?.to_vec();
+            bytes.reverse();
+            let value = format!("0x{}", hex::encode(&bytes));
+            Ok(format!("{} = {}", type_.name.yellow(), value))
+        }
+        TypeEnum::Struct(members) => {
+            let mut out = "".to_owned();
+
+            write!(out, "{} = {{\n", type_.name.yellow())?;
+            for member in members {
+                if let Some(member_type) = ctx.types.get(&member.dw_type_offset) {
+                    let addr = get_member_addr(addr, member)?;
+                    let value = print_value(ctx, addr, member_type)?;
+
+                    write!(
+                        out,
+                        "\t{}: {} = {}\n",
+                        member.name.green(),
+                        member_type.name,
+                        value
+                    )?;
+                } else {
+                    write!(out, "\t{}: <type unknown>\n", member.name.green())?;
+                }
+            }
+            write!(out, "}}")?;
+
+            Ok(out)
+        }
+        e => unimplemented!("{:?}", e),
+    }
+}
+
+fn load_value<'a, R: gimli::Reader>(
+    coredump: &'a [u8],
     frame: &StackFrame,
     param: &addr2line::FunctionParameter<R>,
-    base: Option<&addr2line::BaseLocation>,
+    base: &addr2line::BaseLocation,
     types: &HashMap<u64, Type>,
-) -> Result<String, BoxError> {
-    let base = base.ok_or("no base location")?;
+    load_offset: u64,
+) -> Result<&'a [u8], BoxError> {
     let param_location = param.location.as_ref().ok_or("no param location")?;
 
     let size_of = if let Some(type_offset) = param.type_offset {
@@ -59,24 +110,27 @@ fn get_param_value<R: gimli::Reader>(
         4 // Wasm ptr
     };
 
-    let value = match (base, param_location) {
+    match (base, param_location) {
         (
             addr2line::BaseLocation::WasmLocal(base_local),
-            addr2line::BaseLocation::OffsetFromBase(offset),
+            addr2line::BaseLocation::OffsetFromBase(offset_from_base),
         ) => {
             if let Some(base_addr) = frame.locals.get(*base_local as usize) {
                 let base_addr = *base_addr as i64;
                 // TODO: remove these poisoned values once removed from wasm-edit
                 // assert!(!(base_addr > 669 && base_addr < 680));
 
-                let addr = base_addr + offset;
+                let addr = base_addr + offset_from_base + load_offset as i64;
 
                 if (addr + size_of as i64) > coredump.len() as i64 {
                     return Err("<out of bounds>".into());
                 }
 
-                let value = u32::from_le_bytes(
-                    coredump[(addr as usize)..(addr as usize + size_of as usize)].try_into()?,
+                let value = &coredump[(addr as usize)..(addr as usize + size_of as usize)];
+
+                debug!(
+                    "load value base_addr={} OffsetFromBase={} load_offset={} size_of={} value={:?}",
+                    base_addr, offset_from_base, load_offset, size_of, value
                 );
 
                 // println!(
@@ -84,31 +138,37 @@ fn get_param_value<R: gimli::Reader>(
                 //     offset, base_local, base_addr, value
                 // );
 
-                format!("0x{:0width$x}", value, width = size_of as usize)
+                Ok(value)
             } else {
-                format!("<failed to load base addr in local {}>", base_local)
+                Err(format!("<failed to load base addr in local {}>", base_local).into())
             }
         }
         _ => {
-            format!("<no supported>")
-        } // _ => unimplemented!(),
-    };
-
-    Ok(value)
+            unimplemented!()
+        }
+    }
 }
 
-fn print_infos<R: gimli::Reader>(
-    coredump: &[u8],
+fn select_frame<R: gimli::Reader>(
+    ctx: &mut Context<R>,
     frame: &StackFrame,
-    addr2line: &addr2line::Context<R>,
-    types: &HashMap<u64, Type>,
 ) -> Result<(), BoxError> {
-    let func = match frame.find_symbol(addr2line)? {
+    // Clear previous selected scope
+    ctx.variables.clear();
+
+    let func = match frame.find_symbol(&ctx.addr2line)? {
         Some(f) => f,
         None => {
             return Ok(());
         }
     };
+
+    for param in &func.parameters.params {
+        if let Some(name) = param.name.as_ref() {
+            let name = name.to_string().unwrap().to_string();
+            ctx.variables.insert(name, param.clone());
+        }
+    }
 
     let params = func
         .parameters
@@ -124,8 +184,11 @@ fn print_infos<R: gimli::Reader>(
             let param_location = param.location.as_ref().ok_or("no param location").unwrap();
 
             if let Some(type_offset) = param.type_offset {
-                if let Some(t) = types.get(&type_offset.0.into_u64()) {
-                    format!("{}\t=\tpassed as {:?}\t{:?}", param_name, param_location, t)
+                if let Some(t) = ctx.types.get(&type_offset.0.into_u64()) {
+                    format!(
+                        "{}\t=\tpassed as {:?}\t{}",
+                        param_name, param_location, t.name
+                    )
                 } else {
                     format!(
                         "{}\t=\tpassed as {:?}\tunknown type",
@@ -145,14 +208,8 @@ fn print_infos<R: gimli::Reader>(
     Ok(())
 }
 
-fn print_frame<'a, R: gimli::Reader>(
-    coredump: &[u8],
-    frame: &StackFrame,
-    addr2line: &addr2line::Context<R>,
-    _dwarf: Arc<gimli::Dwarf<R>>,
-    types: &HashMap<u64, Type>,
-) -> Result<(), BoxError> {
-    let func = match frame.find_symbol(addr2line)? {
+fn print_frame<'a, R: gimli::Reader>(ctx: &Context<R>, frame: &StackFrame) -> Result<(), BoxError> {
+    let func = match frame.find_symbol(&ctx.addr2line)? {
         Some(f) => f,
         None => {
             let addr = format!("{:0>6}", frame.funcidx).blue();
@@ -177,17 +234,21 @@ fn print_frame<'a, R: gimli::Reader>(
             .params
             .iter()
             .map(|param| {
-                let param_value =
-                    match get_param_value(coredump, &frame, param, func.base.as_ref(), types) {
-                        Ok(value) => value,
-                        Err(err) => format!("<{}>", err),
-                    };
                 let param_name = if let Some(name) = param.name.as_ref() {
                     name.to_string().unwrap().to_string()
                 } else {
                     "???".to_owned()
                 };
-                format!("{}={}", param_name.green(), param_value)
+
+                if let Some(param_type) = ctx.types.get(&param.type_offset.unwrap().0.into_u64()) {
+                    let addr = get_param_addr(frame, &func, param).unwrap();
+                    let value = read(ctx.coredump, addr, param_type.size_of()).unwrap();
+                    let value = fmt_value(param_type, value);
+
+                    format!("{}={}", param_name.green(), value)
+                } else {
+                    format!("{}=<param has no type>", param_name.green())
+                }
             })
             .collect::<Vec<String>>()
             .join(", ");
@@ -220,11 +281,7 @@ fn print_frame<'a, R: gimli::Reader>(
     Ok(())
 }
 
-fn repl(
-    ctx: &mut Context,
-    coredump: &[u8],
-    source: &wasm_edit::traverse::WasmModule,
-) -> Result<(), BoxError> {
+fn repl(coredump: &[u8], source: &wasm_edit::traverse::WasmModule) -> Result<(), BoxError> {
     // Load a section and return as `Cow<[u8]>`.
     let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
         if let Some(bytes) = source.get_custom_section(id.name()) {
@@ -255,63 +312,178 @@ fn repl(
 
     // Start REPL
 
+    let mut ctx = Context {
+        types,
+        coredump,
+        dwarf: Arc::clone(&dwarf),
+        addr2line,
+        selected_frame: None,
+        variables: HashMap::new(),
+    };
+
     let stdin = io::stdin();
-    for line in stdin.lock().lines() {
-        let line = line?;
-        info!("entered: {}", line);
-        if line == "bt" {
-            backtrace(
-                ctx,
-                coredump,
-                &stack_frames,
-                source,
-                Arc::clone(&dwarf),
-                &types,
-                &addr2line,
-            )?;
+    loop {
+        print!("wasmgdb> ");
+        io::stdout().flush().unwrap();
+
+        let line = stdin.lock().lines().next().unwrap()?;
+
+        match parse_command(&line) {
+            Ok((_, cmd)) => {
+                if let Err(err) = run_command(&mut ctx, &stack_frames, cmd) {
+                    error!("failed to run command ({}): {}", line, err);
+                }
+            }
+            Err(err) => {
+                error!("error while parsing ({}): {}", line, err);
+            }
+        }
+    }
+}
+
+fn run_command<R: gimli::Reader>(
+    ctx: &mut Context<R>,
+    stack_frames: &Vec<StackFrame>,
+    cmd: Command,
+) -> Result<(), BoxError> {
+    match cmd {
+        Command::Backtrace => {
+            backtrace(ctx, stack_frames)?;
         }
 
-        let parts: Vec<String> = line.split(" ").map(|s| s.to_owned()).collect();
+        Command::PrintDeref(what) => {
+            if let Some(variable) = ctx.variables.get(what) {
+                let selected_frame = ctx
+                    .selected_frame
+                    .as_ref()
+                    .ok_or("no frame has been selected")?;
+                let func = selected_frame
+                    .find_symbol(&ctx.addr2line)?
+                    .ok_or("symbol not found")?;
 
-        if parts.first().map(|s| s.to_owned()).unwrap_or_default() == "f" {
-            let selected_frame = parts[1].parse::<usize>()?;
+                let value_type = ctx
+                    .types
+                    .get(&variable.type_offset.unwrap().0.into_u64())
+                    .ok_or("no type for variable")?;
 
+                if let TypeEnum::Ptr(target_type) = &value_type.inner {
+                    let addr =
+                        get_addr(&selected_frame, &func, variable.location.as_ref().unwrap())?;
+                    let ptr = read_ptr(ctx.coredump, addr)?;
+
+                    let out = print_value(&ctx, ptr, target_type)?;
+                    println!("{}: {}", what, out);
+                } else {
+                    error!("variable {} is not a ptr", what);
+                }
+            } else {
+                error!("variable {} not found", what);
+            }
+        }
+
+        Command::Print(what) => {
+            if let Some(variable) = ctx.variables.get(what) {
+                let selected_frame = ctx
+                    .selected_frame
+                    .as_ref()
+                    .ok_or("no frame has been selected")?;
+                let func = selected_frame
+                    .find_symbol(&ctx.addr2line)?
+                    .ok_or("symbol not found")?;
+
+                let value_type = ctx
+                    .types
+                    .get(&variable.type_offset.unwrap().0.into_u64())
+                    .ok_or("no type for variable")?;
+
+                let addr = get_addr(&selected_frame, &func, variable.location.as_ref().unwrap())?;
+
+                let out = print_value(&ctx, addr, value_type)?;
+                println!("{}: {}", what, out);
+            } else {
+                error!("variable {} not found", what);
+            }
+        }
+
+        Command::SelectFrame(selected_frame) => {
             let stack_frame = &stack_frames[stack_frames.len() - 1 - selected_frame];
 
-            print_frame(
-                coredump,
-                &stack_frame,
-                &addr2line,
-                Arc::clone(&dwarf),
-                &types,
-            )?;
-            print_infos(coredump, &stack_frame, &addr2line, &types)?;
+            print_frame(ctx, &stack_frame)?;
+            select_frame(ctx, &stack_frame)?;
 
-            ctx.selected_frame = Some(selected_frame);
+            ctx.selected_frame = Some(stack_frame.clone());
         }
+
+        Command::Unknown => return Err("unknow command".into()),
     }
 
     Ok(())
 }
 
-#[derive(Debug)]
+enum Command<'a> {
+    Unknown,
+    Backtrace,
+    SelectFrame(usize),
+    Print(&'a str),
+    PrintDeref(&'a str),
+}
+
+fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>> {
+    let (input, word) = alpha1(input)?;
+
+    Ok(match word {
+        "bt" => (input, Command::Backtrace),
+        "p" => {
+            let what = tuple((opt(tag("*")), alpha1));
+            let (input, (deref, what)) = preceded(tag(" "), what)(input)?;
+
+            if deref.is_some() {
+                (input, Command::PrintDeref(what))
+            } else {
+                (input, Command::Print(what))
+            }
+        }
+        "f" => {
+            let (input, n) = preceded(tag(" "), digit1)(input)?;
+            let n = n.parse::<usize>().unwrap();
+
+            (input, Command::SelectFrame(n))
+        }
+        _ => (input, Command::Unknown),
+    })
+}
+
+#[derive(Debug, Clone)]
 struct Type {
-    name: Option<String>,
+    name: String,
     inner: TypeEnum,
     byte_size: Option<u64>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum TypeEnum {
-    Ptr,
+    Ptr(Box<Type>),
     Base,
+    Struct(Vec<TypeStructMember>),
+}
+
+#[derive(Debug, Clone)]
+struct TypeStructMember {
+    /// Offset of the type in DWARF
+    dw_type_offset: u64,
+    /// Offset of the member in memory
+    value_ofset: u64,
+    name: String,
 }
 
 impl Type {
     fn size_of(&self) -> u64 {
+        if let TypeEnum::Ptr(_) = self.inner {
+            return 4;
+        }
         if let Some(byte_size) = self.byte_size {
             byte_size
         } else {
-            4 // Wasm ptr
+            unimplemented!()
         }
     }
 }
@@ -331,7 +503,7 @@ fn get_types<R: gimli::Reader>(
 
         let mut children = root.children();
         while let Some(child) = children.next().unwrap() {
-            extract_type(Arc::clone(&dwarf), child, &mut types)?;
+            extract_type(Arc::clone(&dwarf), child, &mut types, &unit)?;
         }
     }
 
@@ -342,8 +514,9 @@ fn extract_type<R: gimli::Reader>(
     dwarf: Arc<gimli::Dwarf<R>>,
     node: gimli::EntriesTreeNode<R>,
     types: &mut HashMap<u64, Type>,
+    unit: &gimli::Unit<R>,
 ) -> Result<(), BoxError> {
-    let entry = node.entry();
+    let entry = node.entry().clone();
 
     let byte_size = if let Ok(Some(value)) = entry.attr(gimli::DW_AT_byte_size) {
         Some(match value.value() {
@@ -358,137 +531,125 @@ fn extract_type<R: gimli::Reader>(
         gimli::DW_TAG_pointer_type => {
             if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
                 let name = extract_name(Arc::clone(&dwarf), name.value());
-                let t = Type {
-                    name,
-                    byte_size,
-                    inner: TypeEnum::Ptr,
-                };
-                types.insert(entry.offset().0.into_u64(), t);
-            }
 
-            None
+                match entry.attr_value(gimli::DW_AT_type)? {
+                    Some(gimli::AttributeValue::UnitRef(ref target_offset)) => {
+                        let mut tree =
+                            unit.entries_tree(Some(gimli::UnitOffset(target_offset.0)))?;
+                        let root = tree.root()?;
+
+                        // Load target type
+                        let mut child_types = HashMap::new();
+                        extract_type(Arc::clone(&dwarf), root, &mut child_types, unit)?;
+
+                        if let Some(target_type) = child_types.get(&target_offset.0.into_u64()) {
+                            let t = Type {
+                                name: name.unwrap_or_else(|| "<no name>".to_owned()),
+                                byte_size,
+                                inner: TypeEnum::Ptr(Box::new(target_type.clone())),
+                            };
+                            types.insert(entry.offset().0.into_u64(), t);
+                        }
+                    }
+                    _ => unimplemented!(),
+                };
+            }
         }
         gimli::DW_TAG_union_type => {
-            if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
-                let type_name = extract_name(Arc::clone(&dwarf), name.value());
-                Some(format!("uniion type_name {:?}", type_name))
-            } else {
-                None
-            }
+            // if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
+            //     let type_name = extract_name(Arc::clone(&dwarf), name.value());
+            //     Some(format!("uniion type_name {:?}", type_name))
+            // } else {
+            //     None
+            // }
         }
         gimli::DW_TAG_base_type => {
             if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
                 let name = extract_name(Arc::clone(&dwarf), name.value());
                 let t = Type {
-                    name,
+                    name: name.unwrap_or_else(|| "<no name>".to_owned()),
                     byte_size,
                     inner: TypeEnum::Base,
                 };
                 types.insert(entry.offset().0.into_u64(), t);
             }
-
-            None
         }
         gimli::DW_TAG_array_type => {
-            if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
-                let type_name = extract_name(Arc::clone(&dwarf), name.value());
-                Some(format!("array type_name {:?}", type_name))
-            } else {
-                None
-            }
+            // if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
+            //     let type_name = extract_name(Arc::clone(&dwarf), name.value());
+            //     Some(format!("array type_name {:?}", type_name))
+            // } else {
+            //     None
+            // }
         }
         gimli::DW_TAG_enumeration_type => {
-            if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
-                let type_name = extract_name(Arc::clone(&dwarf), name.value());
-                Some(format!("enum type_name {:?}", type_name))
-            } else {
-                None
-            }
+            // if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
+            //     let type_name = extract_name(Arc::clone(&dwarf), name.value());
+            //     Some(format!("enum type_name {:?}", type_name))
+            // } else {
+            //     None
+            // }
         }
         gimli::DW_TAG_typedef => {
+            // if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
+            //     let type_name = extract_name(Arc::clone(&dwarf), name.value());
+            //     Some(format!("typedef type_name {:?}", type_name));
+            // }
+        }
+        gimli::DW_TAG_structure_type => {
             if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
-                let type_name = extract_name(Arc::clone(&dwarf), name.value());
-                Some(format!("typedef type_name {:?}", type_name))
-            } else {
-                None
+                let name = extract_name(Arc::clone(&dwarf), name.value());
+                let mut named_children = Vec::new();
+
+                let mut children = node.children();
+                while let Ok(Some(child)) = children.next() {
+                    let entry = child.entry();
+                    match entry.tag() {
+                        gimli::DW_TAG_member => {
+                            let mut member = TypeStructMember {
+                                dw_type_offset: 0,
+                                value_ofset: 0,
+                                name: "".to_owned(),
+                            };
+
+                            member.name = extract_name(
+                                Arc::clone(&dwarf),
+                                entry.attr(gimli::DW_AT_name).unwrap().unwrap().value(),
+                            )
+                            .unwrap();
+
+                            match entry.attr_value(gimli::DW_AT_data_member_location)? {
+                                Some(gimli::AttributeValue::Udata(offset)) => {
+                                    member.value_ofset = offset;
+                                }
+                                _ => unimplemented!(),
+                            };
+
+                            match entry.attr_value(gimli::DW_AT_type)? {
+                                Some(gimli::AttributeValue::UnitRef(ref offset)) => {
+                                    member.dw_type_offset = offset.0.into_u64();
+                                }
+                                _ => {}
+                            };
+
+                            named_children.push(member);
+                        }
+                        _ => {}
+                    };
+                }
+
+                named_children.sort_by_key(|i| i.value_ofset);
+
+                let t = Type {
+                    name: name.unwrap_or_else(|| "<no name>".to_owned()),
+                    byte_size,
+                    inner: TypeEnum::Struct(named_children),
+                };
+                types.insert(entry.offset().0.into_u64(), t);
             }
         }
-        // gimli::DW_TAG_structure_type => {
-        //     let type_name = extract_name(
-        //         Arc::clone(&dwarf),
-        //         entry.attr(gimli::DW_AT_name).unwrap().unwrap().value(),
-        //     );
-        //     println!("struct type_name {:?}", type_name);
-        //     // let named_children = std::collections::HashMap::new();
-
-        //     let mut children = node.children();
-        //     while let Ok(Some(child)) = children.next() {
-        //         // Recursively process a child.
-        //         let entry = child.entry();
-        //         match entry.tag() {
-        //             gimli::DW_TAG_member => {
-        //                 let member_name = extract_name(
-        //                     Arc::clone(&dwarf),
-        //                     entry.attr(gimli::DW_AT_name).unwrap().unwrap().value(),
-        //                 );
-        //                 println!("member {:?}", member_name);
-
-        //                 // if let Some(t) = extract_type(
-        //                 //     dwarf,
-        //                 //     entry.attr(gimli::DW_AT_type).unwrap().unwrap().value(),
-        //                 // ) {
-        //                 //     named_children.insert(member_name.unwrap(), t);
-        //                 // }
-        //             }
-        //             _ => {}
-        //         };
-        //     }
-
-        //     None
-
-        //     // return Some(Type {
-        //     //     name: type_name.unwrap_or("<unnamed type>".to_string()),
-        //     //     named_children: Some(named_children),
-        //     //     ptr: None,
-        //     // });
-        // }
-        _ => None,
+        _ => {}
     };
-
-    // let type_name = {
-    //     let entry = node.entry();
-
-    //     if let Ok(Some(name)) = entry.attr(gimli::DW_AT_name) {
-    //         let type_name = extract_name(Arc::clone(&dwarf), name.value());
-    //         Some(format!("struct type_name {:?}", type_name))
-    //     } else {
-    //         None
-    //     }
-    // };
-
-    // let mut members = Vec::new();
-
-    // let mut children = node.children();
-    // while let Some(child) = children.next()? {
-    //     let entry = child.entry();
-
-    //     match entry.tag() {
-    //         gimli::DW_TAG_member => {
-    //             let name = extract_name(
-    //                 Arc::clone(&dwarf),
-    //                 entry.attr(gimli::DW_AT_name).unwrap().unwrap().value(),
-    //             );
-    //             // let ty = match entry.attr_value(gimli::DW_AT_type)? {
-    //             //     Some(gimli::AttributeValue::UnitRef(ref offset)) => offset.0,
-    //             //     _ => return Err(anyhow!("Failed to get type offset")),
-    //             // };
-    //             members.push(name);
-    //         }
-    //         _ => continue,
-    //     }
-    // }
-
-    // println!("{:?} {{ {:?} }}", type_name, members);
 
     Ok(())
 }
@@ -554,20 +715,14 @@ fn decode_coredump(
 }
 
 fn backtrace<R: gimli::Reader>(
-    ctx: &Context,
-    coredump: &[u8],
+    ctx: &Context<R>,
     stack_frames: &Vec<StackFrame>,
-    source: &wasm_edit::traverse::WasmModule,
-    dwarf: Arc<gimli::Dwarf<R>>,
-    types: &HashMap<u64, Type>,
-    addr2line: &addr2line::Context<R>,
 ) -> Result<(), BoxError> {
     let mut i = stack_frames.len();
     for frame in stack_frames {
         i -= 1;
-
-        if let Some(selected_frame) = ctx.selected_frame {
-            if selected_frame == i {
+        if let Some(selected_frame) = &ctx.selected_frame {
+            if selected_frame.binary_name == frame.binary_name {
                 print!("#{}*\t", i);
             } else {
                 print!("#{}\t", i);
@@ -576,14 +731,94 @@ fn backtrace<R: gimli::Reader>(
             print!("#{}\t", i);
         }
 
-        print_frame(coredump, &frame, &addr2line, Arc::clone(&dwarf), &types)?;
+        print_frame(ctx, &frame)?;
     }
 
     Ok(())
 }
 
-struct Context {
-    selected_frame: Option<usize>,
+fn fmt_value(type_: &Type, value: &[u8]) -> String {
+    let size_of = type_.size_of();
+    assert_eq!(size_of as usize, value.len());
+    match &type_.inner {
+        TypeEnum::Ptr(_) | TypeEnum::Base => match size_of {
+            4 => {
+                let value = u32::from_le_bytes(value.try_into().unwrap());
+                format!("0x{:0width$x}", value, width = size_of as usize)
+            }
+            8 => {
+                let value = u64::from_le_bytes(value.try_into().unwrap());
+                format!("0x{:0width$x}", value, width = size_of as usize)
+            }
+            n => format!("<base type size={}>", n),
+        },
+        TypeEnum::Struct(_) => {
+            format!("<struct>")
+        }
+    }
+}
+
+/// Get the absolute addr of a member in memory
+fn get_member_addr(addr: u32, member: &TypeStructMember) -> Result<u32, BoxError> {
+    Ok(addr + member.value_ofset as u32)
+}
+
+/// Get the absolute addr of a function parameter in memory
+fn get_param_addr<R: gimli::Reader>(
+    frame: &StackFrame,
+    func: &addr2line::Function<R>,
+    param: &addr2line::FunctionParameter<R>,
+) -> Result<u32, BoxError> {
+    let location = param.location.as_ref().ok_or("param has no location")?;
+    get_addr(frame, func, &location)
+}
+
+/// Get the absolute addr in memory
+fn get_addr<R: gimli::Reader>(
+    frame: &StackFrame,
+    func: &addr2line::Function<R>,
+    location: &addr2line::BaseLocation,
+) -> Result<u32, BoxError> {
+    let base = func.base.as_ref().ok_or("func has no base addr")?;
+
+    match (base, location) {
+        (
+            addr2line::BaseLocation::WasmLocal(base_local),
+            addr2line::BaseLocation::OffsetFromBase(offset_from_base),
+        ) => {
+            if let Some(base_addr) = frame.locals.get(*base_local as usize) {
+                Ok(base_addr + *offset_from_base as u32)
+            } else {
+                Err(format!("failed to load base addr in local {}", base_local).into())
+            }
+        }
+        _ => {
+            unimplemented!()
+        }
+    }
+}
+
+fn read_ptr(coredump: &[u8], addr: u32) -> Result<u32, BoxError> {
+    let bytes = read(coredump, addr, 4)?;
+    Ok(u32::from_le_bytes(bytes.try_into()?))
+}
+
+fn read<'a>(coredump: &'a [u8], addr: u32, size: u64) -> Result<&'a [u8], BoxError> {
+    Ok(&coredump[(addr as usize)..(addr as usize + size as usize)])
+}
+
+struct Context<'a, R: gimli::Reader> {
+    selected_frame: Option<StackFrame>,
+    /// Variables present in the selected scope
+    variables: HashMap<String, addr2line::FunctionParameter<R>>,
+
+    /// Input coredump, ie process memory image.
+    coredump: &'a [u8],
+
+    /// DWARF types
+    types: HashMap<u64, Type>,
+    addr2line: addr2line::Context<R>,
+    dwarf: Arc<gimli::Dwarf<R>>,
 }
 
 pub fn main() -> Result<(), BoxError> {
@@ -611,11 +846,5 @@ pub fn main() -> Result<(), BoxError> {
         .map_err(|err| format!("failed to parse Wasm module: {}", err))?;
     let source = wasm_edit::traverse::WasmModule::new(Arc::new(source));
 
-    let mut ctx = Context {
-        selected_frame: None,
-    };
-
-    println!("ok");
-    repl(&mut ctx, &coredump, &source)?;
-    Ok(())
+    repl(&coredump, &source)
 }
