@@ -110,17 +110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ddbug_parser"
-version = "0.3.0"
-dependencies = [
- "fnv",
- "gimli",
- "log",
- "memmap",
- "object",
-]
-
-[[package]]
 name = "env_logger"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -440,16 +429,27 @@ dependencies = [
 
 [[package]]
 name = "wasmgdb"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "colored",
- "ddbug_parser",
  "env_logger",
  "gimli",
  "hex",
  "log",
  "nom",
  "wasm-edit",
+ "wasmgdb_ddbug_parser",
+]
+
+[[package]]
+name = "wasmgdb_ddbug_parser"
+version = "0.3.1"
+dependencies = [
+ "fnv",
+ "gimli",
+ "log",
+ "memmap",
+ "object",
 ]
 
 [[package]]

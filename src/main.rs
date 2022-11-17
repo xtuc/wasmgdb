@@ -18,6 +18,8 @@ use std::io::Write as IoWrite;
 use std::sync::Arc;
 use std::{borrow, env};
 
+use wasmgdb_ddbug_parser as ddbug_parser;
+
 type BoxError = Box<dyn std::error::Error>;
 
 /// Struct collect while unwinding by wasm-edit
