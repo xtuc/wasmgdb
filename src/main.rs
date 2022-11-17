@@ -259,6 +259,9 @@ fn repl(
     let dwarf = Arc::new(dwarf_cow.borrow(&borrow_section));
 
     let stack_frames = decode_coredump(source, coredump)?;
+    if stack_frames.len() == 0 {
+        println!("No frames recorded");
+    }
 
     // Start REPL
 
