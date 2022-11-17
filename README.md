@@ -10,6 +10,11 @@ cargo install wasmgdb
 
 ## Usage
 
+Use [wasm-edit] to transform your module and, once WebAssembly traps, collect the
+WebAssembly memory and analyze the coredump.
+
+## Analyze a coredump
+
 ```
 wasmgdb <coredump> <source.wasm>
 ```
@@ -38,3 +43,5 @@ Requires to select the frame with `f` first.
 
 Print the variable as string.
 Requires to select the frame with `f` first.
+
+[wasm-edit]: https://github.com/xtuc/wasm-edit#coredump-generation
