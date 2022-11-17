@@ -15,7 +15,8 @@ mod commands;
 mod coredump;
 mod memory;
 
-use commands::{parse_command, run_command};
+use commands::parser::parse_command;
+use commands::run_command;
 
 pub(crate) type BoxError = Box<dyn std::error::Error>;
 
@@ -87,7 +88,7 @@ pub(crate) fn print_value<R: gimli::Reader>(
                     }
                 }
             } else {
-                write!(out, "...")?;
+                write!(out, "…")?;
             }
             write!(out, "}}")?;
 
