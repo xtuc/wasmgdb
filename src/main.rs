@@ -20,8 +20,8 @@ use commands::run_command;
 
 pub(crate) type BoxError = Box<dyn std::error::Error>;
 
-pub(crate) fn print_value<R: gimli::Reader>(
-    ctx: &Context<R>,
+pub(crate) fn print_value(
+    ctx: &Context,
     addr: u32,
     type_: &ddbug_parser::Type,
     mut depth: usize,
@@ -103,30 +103,6 @@ fn repl(
     source: &wasm_edit::traverse::WasmModule,
     ddbug: ddbug_parser::FileHash<'_>,
 ) -> Result<(), BoxError> {
-    // Load a section and return as `Cow<[u8]>`.
-    let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
-        if let Some(bytes) = source.get_custom_section(id.name()) {
-            Ok(borrow::Cow::from(bytes))
-        } else {
-            warn!("DWARF section {} not found", id.name());
-            Ok(borrow::Cow::Borrowed(&[][..]))
-        }
-    };
-
-    let endian = gimli::RunTimeEndian::Little;
-
-    // Load all of the sections.
-    let dwarf_cow = gimli::Dwarf::load(&load_section)?;
-
-    // Borrow a `Cow<[u8]>` to create an `EndianSlice`.
-    let borrow_section: &dyn for<'a> Fn(
-        &'a borrow::Cow<[u8]>,
-    ) -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
-        &|section| gimli::EndianSlice::new(&*section, endian);
-
-    // Create `EndianSlice`s for all of the sections.
-    let dwarf = Arc::new(dwarf_cow.borrow(&borrow_section));
-
     let stack_frames = coredump::decode_coredump(source, coredump)?;
     if stack_frames.len() == 0 {
         println!("No frames recorded");
@@ -137,7 +113,6 @@ fn repl(
     let mut ctx = Context {
         ddbug,
         coredump,
-        dwarf: Arc::clone(&dwarf),
         selected_frame: None,
         variables: HashMap::new(),
     };
@@ -162,16 +137,13 @@ fn repl(
     }
 }
 
-pub(crate) struct Context<'a, R: gimli::Reader> {
+pub(crate) struct Context<'a> {
     selected_frame: Option<coredump::StackFrame>,
     /// Variables present in the selected scope
     variables: HashMap<String, ddbug_parser::Parameter<'a>>,
 
     /// Input coredump, ie process memory image.
     coredump: &'a [u8],
-
-    /// DWARF types
-    dwarf: Arc<gimli::Dwarf<R>>,
 
     /// DWARF informations
     ddbug: ddbug_parser::FileHash<'a>,

@@ -86,8 +86,8 @@ fn evaluate_expr<'a, 'b>(
     }
 }
 
-pub(crate) fn print<'a, R: gimli::Reader>(
-    ctx: &Context<R>,
+pub(crate) fn print<'a>(
+    ctx: &Context,
     format: PrintFormat,
     what: Expr<'a>,
 ) -> Result<(), BoxError> {

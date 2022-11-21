@@ -32,24 +32,28 @@ pub(crate) fn get_addr<'a>(
     let base = func.frame_base();
     let base = base.as_ref().ok_or("func has no base addr")?;
 
-    let offset_from_base =
-        if let ddbug_parser::DataLocation::OffsetFromBase(offset_from_base) = location {
-            offset_from_base
-        } else {
-            unimplemented!()
-        };
-
-    match base {
-        ddbug_parser::DataLocation::WasmLocal(base_local) => {
+    match (base, location) {
+        (
+            ddbug_parser::DataLocation::WasmLocal(base_local),
+            ddbug_parser::DataLocation::OffsetFromBase(offset_from_base),
+        ) => {
             if let Some(base_addr) = frame.locals.get(*base_local as usize) {
                 Ok(base_addr + *offset_from_base as u32)
             } else {
                 Err(format!("failed to load base addr in local {}", base_local).into())
             }
         }
-        e => {
-            warn!("implement {:?}", e);
-            Err(format!("get_addr {:?} not implemented", e).into())
+
+        (_, ddbug_parser::DataLocation::WasmLocal(localidx)) => {
+            if let Some(addr) = frame.locals.get(*localidx as usize) {
+                Ok(*addr)
+            } else {
+                Err(format!("failed to load base addr in local {}", localidx).into())
+            }
+        }
+
+        (b, l) => {
+            unimplemented!("{:?} {:?}", b, l);
         }
     }
 }

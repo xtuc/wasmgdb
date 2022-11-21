@@ -49,8 +49,8 @@ pub(crate) enum PrintFormat {
     String,
 }
 
-pub(crate) fn run_command<R: gimli::Reader>(
-    ctx: &mut Context<R>,
+pub(crate) fn run_command(
+    ctx: &mut Context,
     stack_frames: &Vec<coredump::StackFrame>,
     cmd: Command,
 ) -> Result<(), BoxError> {

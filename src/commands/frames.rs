@@ -1,8 +1,10 @@
 use crate::{coredump, memory, BoxError, Context};
 use colored::Colorize;
 
-pub(crate) fn backtrace<R: gimli::Reader>(
-    ctx: &Context<R>,
+use wasmgdb_ddbug_parser as ddbug_parser;
+
+pub(crate) fn backtrace(
+    ctx: &Context,
     stack_frames: &Vec<coredump::StackFrame>,
 ) -> Result<(), BoxError> {
     let mut i = stack_frames.len();
@@ -24,10 +26,20 @@ pub(crate) fn backtrace<R: gimli::Reader>(
     Ok(())
 }
 
-pub(crate) fn print_frame<'a, R: gimli::Reader>(
-    ctx: &Context<R>,
-    frame: &coredump::StackFrame,
-) -> Result<(), BoxError> {
+fn find_location<'a>(ctx: &Context<'a>, search: u64) -> Option<&'a ddbug_parser::Function<'a>> {
+    // TODO: optimize with a binary search
+    for (_, func) in &ctx.ddbug.functions_by_offset {
+        for range in func.ranges() {
+            if range.contains(search) {
+                return Some(func);
+            }
+        }
+    }
+
+    None
+}
+
+pub(crate) fn print_frame<'a>(ctx: &Context, frame: &coredump::StackFrame) -> Result<(), BoxError> {
     if let Some(func) = ctx.ddbug.functions_by_linkage_name.get(&frame.binary_name) {
         let source = format!(
             "{}/{}",
@@ -100,8 +112,8 @@ pub(crate) fn print_frame<'a, R: gimli::Reader>(
     Ok(())
 }
 
-pub(crate) fn select_frame<R: gimli::Reader>(
-    ctx: &mut Context<R>,
+pub(crate) fn select_frame(
+    ctx: &mut Context,
     frame: &coredump::StackFrame,
 ) -> Result<(), BoxError> {
     // Clear previous selected scope

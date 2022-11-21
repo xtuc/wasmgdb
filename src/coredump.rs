@@ -10,6 +10,7 @@ use log::debug;
 #[derive(Debug, Clone)]
 pub(crate) struct StackFrame {
     pub(crate) funcidx: u32,
+    pub(crate) code_offset: u32,
     pub(crate) binary_name: String,
     pub(crate) locals: Vec<u32>,
 }
@@ -31,6 +32,8 @@ pub(crate) fn decode_coredump(
     for i in 0..nframe {
         let funcidx = u32::from_le_bytes(coredump[addr..addr + 4].try_into().unwrap());
         addr += 4;
+        let code_offset = u32::from_le_bytes(coredump[addr..addr + 4].try_into().unwrap());
+        addr += 4;
         let count_local = u32::from_le_bytes(coredump[addr..addr + 4].try_into().unwrap());
         addr += 4;
 
@@ -42,6 +45,7 @@ pub(crate) fn decode_coredump(
         }
 
         let frame = StackFrame {
+            code_offset: code_offset + source.get_code_section_start_offset().unwrap() as u32,
             binary_name: source
                 .get_func_name(funcidx)
                 .unwrap_or_else(|| "unknown".to_string()),
