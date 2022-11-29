@@ -56,13 +56,13 @@ Examine the memory address at <hex-addr> with <number> length.
 
 Examine the memory address at <hex-addr> and prints as string of <number> length.
 
-#### `find`
+#### `find <expr>`
 
-Find a string in memory.
+Find the <expr> as bytes in memory.
 
 Usage:
-`find <start-addr>, <end-addr>, "string"`
-`find "string"`
+`find <start-addr>, <end-addr>, <expr>`
+`find <expr>`
 
 #### `info types`
 
@@ -72,5 +72,6 @@ List all defined types.
 
 - Member access: `<object>-><member>`
 - Cast: `(<type>) <hex-addr>`
+- String: `"<string>"`
 
 [wasm-edit]: https://github.com/xtuc/wasm-edit#coredump-generation

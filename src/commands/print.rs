@@ -49,13 +49,17 @@ fn evaluate_expr<'a, 'b>(
     expr_type: Option<ddbug_parser::Type<'a>>,
 ) -> Result<EvaluationResult<'a>, BoxError> {
     match &expr {
+        Expr::Str(_) => {
+            unreachable!()
+        }
+
         Expr::Name(_) => Ok(EvaluationResult {
             addr: base_addr,
             ty: expr_type.unwrap(),
             expr,
         }),
         Expr::Hex(addr) => Ok(EvaluationResult {
-            addr: *addr,
+            addr: *addr as u32,
             ty: expr_type.unwrap(),
             expr,
         }),

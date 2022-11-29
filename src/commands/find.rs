@@ -6,7 +6,7 @@ pub(crate) fn find<'a, R: gimli::Reader>(
     ctx: &Context<R>,
     start: Option<Expr<'a>>,
     end: Option<Expr<'a>>,
-    txt: &'a str,
+    expr: Expr<'a>,
 ) -> Result<(), BoxError> {
     let start = if let Some(Expr::Hex(v)) = start {
         v as usize
@@ -19,7 +19,7 @@ pub(crate) fn find<'a, R: gimli::Reader>(
         ctx.coredump.len()
     };
 
-    let search_bytes = txt.as_bytes();
+    let search_bytes = expr_to_bytes(&expr)?;
     let mem = &ctx.coredump[start..end];
 
     let mut offset = 0;
@@ -43,4 +43,12 @@ pub(crate) fn find<'a, R: gimli::Reader>(
     Ok(())
 }
 
-// x/16384s 0x18a1b90
+fn expr_to_bytes<'a>(expr: &Expr<'a>) -> Result<Vec<u8>, BoxError> {
+    use Expr::*;
+
+    match expr {
+        Hex(n) => Ok(n.to_le_bytes().to_vec()),
+        Str(s) => Ok(s.as_bytes().to_vec()),
+        _ => Err(format!("cannot turn {} into bytes", expr).into()),
+    }
+}

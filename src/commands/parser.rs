@@ -33,6 +33,12 @@ fn parse_parens_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     delimited(tag("("), parse_expr, tag(")"))(input)
 }
 
+fn parse_str_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
+    map(delimited(tag("\""), take_until("\""), tag("\"")), |v| {
+        Expr::Str(v)
+    })(input)
+}
+
 fn parse_hex_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     let hex = preceded(
         alt((tag("0x"), tag("0X"))),
@@ -42,7 +48,7 @@ fn parse_hex_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
         ))),
     );
     map(hex, |v: &'a str| {
-        let v = u32::from_str_radix(&str::replace(&v, "_", ""), 16).unwrap();
+        let v = u64::from_str_radix(&str::replace(&v, "_", ""), 16).unwrap();
         Expr::Hex(v)
     })(input)
 }
@@ -51,6 +57,7 @@ fn parse_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     alt((
         parse_expr_member_access,
         parse_expr_cast,
+        parse_str_expr,
         parse_parens_expr,
         parse_expr_deref,
         parse_hex_expr,
@@ -131,11 +138,10 @@ pub(crate) fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>>
         "find" => {
             let start = opt(terminated(parse_expr, tag(", ")));
             let end = opt(terminated(parse_expr, tag(", ")));
-            let text = preceded(tag("\""), take_until("\""));
+            let (input, (start, end, expr)) =
+                preceded(space0, tuple((start, end, parse_expr)))(input)?;
 
-            let (input, (start, end, text)) = preceded(space0, tuple((start, end, text)))(input)?;
-
-            (input, Command::Find(start, end, text))
+            (input, Command::Find(start, end, expr))
         }
         _ => (input, Command::Unknown),
     })
@@ -248,5 +254,16 @@ mod tests {
 
         let (_, cmd) = parse_command("info types").unwrap();
         assert_eq!(cmd, Info("types"));
+    }
+
+    #[test]
+    fn test_find() {
+        use Command::*;
+
+        let (_, cmd) = parse_command("find \"a\"").unwrap();
+        assert_eq!(cmd, Find(None, None, Expr::Str("a")));
+
+        let (_, cmd) = parse_command("find 0x12").unwrap();
+        assert_eq!(cmd, Find(None, None, Expr::Hex(0x12)));
     }
 }
