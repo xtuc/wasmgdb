@@ -1,8 +1,10 @@
 use nom::branch::alt;
 use nom::bytes::complete::tag;
+use nom::bytes::complete::take_until;
 use nom::bytes::complete::take_while1;
 use nom::character::complete::alpha1;
 use nom::character::complete::digit1;
+use nom::character::complete::space0;
 use nom::character::complete::space1;
 use nom::character::complete::{char, one_of};
 use nom::character::is_alphabetic;
@@ -48,6 +50,7 @@ fn parse_hex_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
 fn parse_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     alt((
         parse_expr_member_access,
+        parse_expr_cast,
         parse_parens_expr,
         parse_expr_deref,
         parse_hex_expr,
@@ -59,6 +62,12 @@ fn parse_expr_deref<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     map(preceded(tag("*"), parse_expr), |expr| {
         Expr::Deref(Box::new(expr))
     })(input)
+}
+
+fn parse_expr_cast<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
+    let (input, type_) = delimited(tag("("), take_until(")"), tag(")"))(input)?;
+    let (input, target) = preceded(space0, parse_expr)(input)?;
+    Ok((input, Expr::Cast(type_, Box::new(target))))
 }
 
 /// Member access lhs accepts a single expression or a parenthesed expression
@@ -114,6 +123,19 @@ pub(crate) fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>>
             let n = n.parse::<usize>().unwrap();
 
             (input, Command::SelectFrame(n))
+        }
+        "info" => {
+            let (input, what) = preceded(space1, ident)(input)?;
+            (input, Command::Info(what))
+        }
+        "find" => {
+            let start = opt(terminated(parse_expr, tag(", ")));
+            let end = opt(terminated(parse_expr, tag(", ")));
+            let text = preceded(tag("\""), take_until("\""));
+
+            let (input, (start, end, text)) = preceded(space0, tuple((start, end, text)))(input)?;
+
+            (input, Command::Find(start, end, text))
         }
         _ => (input, Command::Unknown),
     })
@@ -175,5 +197,56 @@ mod tests {
             cmd,
             MemberAccess(Box::new(Deref(Box::new(Name("test")))), "ab")
         );
+    }
+
+    #[test]
+    fn test_expr_cast() {
+        use Expr::*;
+
+        let (_, expr) = parse_expr("(float) var").unwrap();
+        assert_eq!(expr, Cast("float", Box::new(Name("var"))));
+
+        let (_, expr) = parse_expr("(float)var").unwrap();
+        assert_eq!(expr, Cast("float", Box::new(Name("var"))));
+
+        let (_, expr) = parse_expr("(a::float<usize>) 0x1").unwrap();
+        assert_eq!(expr, Cast("a::float<usize>", Box::new(Hex(1))));
+    }
+
+    #[test]
+    fn test_expr_member_access_cast() {
+        use Expr::*;
+
+        let (_, cmd) = parse_expr("((usize) 0x3)->ab").unwrap();
+        assert_eq!(
+            cmd,
+            MemberAccess(Box::new(Cast("usize", Box::new(Hex(3)))), "ab")
+        );
+    }
+
+    #[test]
+    fn test_print_var() {
+        use Command::*;
+        use Expr::*;
+
+        let (_, cmd) = parse_command("p var").unwrap();
+        assert_eq!(cmd, Print(PrintFormat::None, Name("var")));
+    }
+
+    #[test]
+    fn test_print_var_as_string() {
+        use Command::*;
+        use Expr::*;
+
+        let (_, cmd) = parse_command("p/s var").unwrap();
+        assert_eq!(cmd, Print(PrintFormat::String, Name("var")));
+    }
+
+    #[test]
+    fn test_info_types() {
+        use Command::*;
+
+        let (_, cmd) = parse_command("info types").unwrap();
+        assert_eq!(cmd, Info("types"));
     }
 }

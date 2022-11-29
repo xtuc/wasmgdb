@@ -73,17 +73,19 @@ pub(crate) fn print_value<R: gimli::Reader>(
 
                         write!(
                             out,
-                            "{}{}: {}\n",
+                            "{}{} (0x{:x}): {}\n",
                             ident,
                             member.name().unwrap().green(),
+                            addr,
                             value
                         )?;
                     } else {
                         write!(
                             out,
-                            "{}{}: <type unknown>\n",
+                            "{}{} (0x{:x}): <type unknown>\n",
                             ident,
-                            member.name().unwrap().green()
+                            member.name().unwrap().green(),
+                            addr
                         )?;
                     }
                 }

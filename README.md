@@ -29,27 +29,48 @@ Display the stack trace.
 
 Selects a stack frame and display informations.
 
-#### `p <var-name>`
+#### `p <expr>`
 
 Inspect the content of a variable.
 Requires to select the frame with `f` first.
 
-#### `p *<var-name>`
+#### `p *<expr>`
 
 Inspect the content of a variable after dereferencing it.
 Requires to select the frame with `f` first.
 
-#### `p/s <var-name>`
+#### `p/s <expr>`
 
 Print the variable as string.
 Requires to select the frame with `f` first.
 
-#### `x/<number> hex-addr`
+#### `p (<type>) <expr>`
 
-Examine the memory address with <number> length.
+Print the content of <expr> as <type>.
 
-#### `x/<number>s hex-addr`
+#### `x/<number> <hex-addr>`
 
-Examine the memory address and prints as string of <number> length.
+Examine the memory address at <hex-addr> with <number> length.
+
+#### `x/<number>s <hex-addr>`
+
+Examine the memory address at <hex-addr> and prints as string of <number> length.
+
+#### `find`
+
+Find a string in memory.
+
+Usage:
+`find <start-addr>, <end-addr>, "string"`
+`find "string"`
+
+#### `info types`
+
+List all defined types.
+
+### Expr
+
+Member access: `<object>-><member>`
+Cast: `(<type>) <hex-addr>`
 
 [wasm-edit]: https://github.com/xtuc/wasm-edit#coredump-generation

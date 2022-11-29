@@ -1,13 +1,9 @@
 use crate::commands::{Expr, PrintFormat};
-use crate::print_value;
-use crate::{coredump, memory, BoxError, Context};
-use colored::Colorize;
-use log::error;
+use crate::{BoxError, Context};
 use std::fmt::Write;
-use wasmgdb_ddbug_parser as ddbug_parser;
 
-pub(crate) fn examine<'a>(
-    ctx: &Context,
+pub(crate) fn examine<'a, R: gimli::Reader>(
+    ctx: &Context<R>,
     what: Expr<'a>,
     number: Option<u32>,
     format: Option<PrintFormat>,
@@ -19,7 +15,7 @@ pub(crate) fn examine<'a>(
     };
 
     let mut out = "".to_owned();
-    let number = number.unwrap();
+    let number = number.unwrap_or_else(|| 8);
 
     for offset in 0..number {
         let v = ctx.coredump[addr as usize + offset as usize];

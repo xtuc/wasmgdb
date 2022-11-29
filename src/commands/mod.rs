@@ -5,7 +5,9 @@ use std::fmt;
 use crate::{coredump, BoxError, Context};
 
 mod examine;
+mod find;
 mod frames;
+mod info;
 pub(crate) mod parser;
 mod print;
 
@@ -14,14 +16,15 @@ pub(crate) enum Expr<'a> {
     Name(&'a str),
     Hex(u32),
     Deref(Box<Expr<'a>>),
+    Cast(&'a str, Box<Expr<'a>>),
     MemberAccess(Box<Expr<'a>>, &'a str),
 }
 
 impl<'a> Expr<'a> {
-    pub(crate) fn object(&'a self) -> &'a str {
+    pub(crate) fn object(&'a self) -> Option<&'a str> {
         match self {
-            Expr::Hex(_) => unreachable!(),
-            Expr::Name(n) => n,
+            Expr::Cast(_, _) | Expr::Hex(_) => None,
+            Expr::Name(n) => Some(n),
             Expr::Deref(t) => t.object(),
             Expr::MemberAccess(o, _) => o.object(),
         }
@@ -31,8 +34,9 @@ impl<'a> Expr<'a> {
 impl<'a> fmt::Display for Expr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Expr::Hex(n) => write!(f, "0x{}", n),
+            Expr::Hex(n) => write!(f, "0x{:x}", n),
             Expr::Name(v) => write!(f, "{}", v),
+            Expr::Cast(t, v) => write!(f, "({}) {}", t, v),
             Expr::Deref(t) => write!(f, "*{}", t),
             Expr::MemberAccess(expr, v) => write!(f, "{}.{}", expr, v),
         }
@@ -46,6 +50,8 @@ pub(crate) enum Command<'a> {
     SelectFrame(usize),
     Print(PrintFormat, Expr<'a>),
     Examine(Expr<'a>, (Option<u32>, Option<PrintFormat>)),
+    Find(Option<Expr<'a>>, Option<Expr<'a>>, &'a str),
+    Info(&'a str),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -70,6 +76,14 @@ pub(crate) fn run_command<R: gimli::Reader>(
 
         Command::Print(format, what) => {
             print::print(&ctx, format, what)?;
+        }
+
+        Command::Find(start, end, txt) => {
+            find::find(&ctx, start, end, txt)?;
+        }
+
+        Command::Info(what) => {
+            info::info(&ctx, what)?;
         }
 
         Command::SelectFrame(selected_frame) => {
