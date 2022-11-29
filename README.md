@@ -70,7 +70,7 @@ List all defined types.
 
 ### Expr
 
-Member access: `<object>-><member>`
-Cast: `(<type>) <hex-addr>`
+- Member access: `<object>-><member>`
+- Cast: `(<type>) <hex-addr>`
 
 [wasm-edit]: https://github.com/xtuc/wasm-edit#coredump-generation
