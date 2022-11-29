@@ -44,4 +44,12 @@ Requires to select the frame with `f` first.
 Print the variable as string.
 Requires to select the frame with `f` first.
 
+#### `x/<number> hex-addr`
+
+Examine the memory address with <number> length.
+
+#### `x/<number>s hex-addr`
+
+Examine the memory address and prints as string of <number> length.
+
 [wasm-edit]: https://github.com/xtuc/wasm-edit#coredump-generation

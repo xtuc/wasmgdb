@@ -4,6 +4,7 @@ use std::fmt;
 
 use crate::{coredump, BoxError, Context};
 
+mod examine;
 mod frames;
 pub(crate) mod parser;
 mod print;
@@ -11,6 +12,7 @@ mod print;
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Expr<'a> {
     Name(&'a str),
+    Hex(u32),
     Deref(Box<Expr<'a>>),
     MemberAccess(Box<Expr<'a>>, &'a str),
 }
@@ -18,6 +20,7 @@ pub(crate) enum Expr<'a> {
 impl<'a> Expr<'a> {
     pub(crate) fn object(&'a self) -> &'a str {
         match self {
+            Expr::Hex(_) => unreachable!(),
             Expr::Name(n) => n,
             Expr::Deref(t) => t.object(),
             Expr::MemberAccess(o, _) => o.object(),
@@ -28,6 +31,7 @@ impl<'a> Expr<'a> {
 impl<'a> fmt::Display for Expr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Expr::Hex(n) => write!(f, "0x{}", n),
             Expr::Name(v) => write!(f, "{}", v),
             Expr::Deref(t) => write!(f, "*{}", t),
             Expr::MemberAccess(expr, v) => write!(f, "{}.{}", expr, v),
@@ -41,6 +45,7 @@ pub(crate) enum Command<'a> {
     Backtrace,
     SelectFrame(usize),
     Print(PrintFormat, Expr<'a>),
+    Examine(Expr<'a>, (Option<u32>, Option<PrintFormat>)),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -57,6 +62,10 @@ pub(crate) fn run_command(
     match cmd {
         Command::Backtrace => {
             frames::backtrace(ctx, stack_frames)?;
+        }
+
+        Command::Examine(what, (number, format)) => {
+            examine::examine(&ctx, what, number, format)?;
         }
 
         Command::Print(format, what) => {

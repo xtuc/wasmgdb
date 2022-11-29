@@ -46,6 +46,8 @@ fn evaluate_expr<'a, 'b>(
             expr,
         }),
 
+        Expr::Hex(_) => unreachable!(),
+
         Expr::Deref(target) => {
             match expr_type.kind() {
                 ddbug_parser::TypeKind::Modifier(type_modifier)
