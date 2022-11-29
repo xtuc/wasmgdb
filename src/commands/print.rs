@@ -38,7 +38,7 @@ struct EvaluationCtx<'a, 'b> {
 
 struct EvaluationResult<'a> {
     addr: u32,
-    ty: ddbug_parser::Type<'a>,
+    ty: Option<ddbug_parser::Type<'a>>,
     expr: Expr<'a>,
 }
 
@@ -55,12 +55,12 @@ fn evaluate_expr<'a, 'b>(
 
         Expr::Name(_) => Ok(EvaluationResult {
             addr: base_addr,
-            ty: expr_type.unwrap(),
+            ty: Some(expr_type.unwrap()),
             expr,
         }),
         Expr::Hex(addr) => Ok(EvaluationResult {
             addr: *addr as u32,
-            ty: expr_type.unwrap(),
+            ty: expr_type,
             expr,
         }),
 
@@ -84,7 +84,7 @@ fn evaluate_expr<'a, 'b>(
 
                     Ok(EvaluationResult {
                         addr,
-                        ty,
+                        ty: Some(ty),
                         expr: *target.clone(),
                     })
                 }
@@ -95,15 +95,14 @@ fn evaluate_expr<'a, 'b>(
         Expr::MemberAccess(base, member_access) => {
             // FIXME: assume for now base is the input expr. ie only works for one level of member.
             let base = evaluate_expr(ctx, base_addr, *base.clone(), expr_type)?;
-
-            let member = get_member(base.ty, member_access)?;
+            let member = get_member(base.ty.unwrap(), member_access)?;
 
             let addr = base.addr + member.data_location().unwrap() as u32;
             let ty = member.ty(&ctx.ddbug).unwrap().into_owned();
 
             Ok(EvaluationResult {
                 addr,
-                ty,
+                ty: Some(ty),
                 expr: Expr::Name(member_access),
             })
         }
@@ -156,8 +155,12 @@ pub(crate) fn print<'a, R: gimli::Reader>(
                 }
 
                 PrintFormat::None => {
-                    let out = print_value(&ctx, result.addr, &result.ty, 0)?;
-                    println!("{} (0x{:x}): {}", result.expr, result.addr, out);
+                    if let Some(ty) = &result.ty {
+                        let out = print_value(&ctx, result.addr, ty, 0)?;
+                        println!("{} (0x{:x}): {}", result.expr, result.addr, out);
+                    } else {
+                        error!("don't know how to print value");
+                    }
                 }
             }
         } else {
@@ -170,8 +173,35 @@ pub(crate) fn print<'a, R: gimli::Reader>(
             coredump: ctx.coredump,
         };
         let result = evaluate_expr(&eval_ctx, 0, what, None)?;
-        let out = print_value(&ctx, result.addr, &result.ty, 0)?;
-        println!("{} (0x{:x}): {}", result.expr, result.addr, out);
+
+        // FIXME: copy pasted from above
+        match format {
+            PrintFormat::String => {
+                let ptr = memory::read_ptr(ctx.coredump, result.addr)?;
+
+                let mut addr = ptr;
+                let mut out = "".to_owned();
+                loop {
+                    let v = ctx.coredump[addr as usize];
+                    if v == 0 {
+                        break;
+                    }
+                    write!(out, "{}", v as char)?;
+                    addr += 1;
+                }
+
+                println!("{} ({} char(s)) = {}", result.expr, out.len(), out);
+            }
+
+            PrintFormat::None => {
+                if let Some(ty) = &result.ty {
+                    let out = print_value(&ctx, result.addr, ty, 0)?;
+                    println!("{} (0x{:x}): {}", result.expr, result.addr, out);
+                } else {
+                    error!("don't know how to print value");
+                }
+            }
+        }
     }
 
     Ok(())
