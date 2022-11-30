@@ -43,7 +43,18 @@ pub(crate) fn print_value<R: gimli::Reader>(
             let size_of = base_type.byte_size().unwrap_or(4);
             let mut bytes = memory::read(ctx.coredump, addr, size_of)?.to_vec();
             bytes.reverse();
-            let value = format!("0x{}", hex::encode(&bytes));
+            let value = match base_type.encoding() {
+                ddbug_parser::BaseTypeEncoding::Boolean => {
+                    assert_eq!(bytes.len(), 1);
+
+                    if bytes[0] == 0x0 {
+                        "false".to_owned()
+                    } else {
+                        "true".to_owned()
+                    }
+                }
+                _ => format!("0x{}", hex::encode(&bytes)),
+            };
             Ok(format!(
                 "{}{} = {}",
                 ident,
@@ -96,8 +107,44 @@ pub(crate) fn print_value<R: gimli::Reader>(
 
             Ok(out)
         }
+        ddbug_parser::TypeKind::Enumeration(enum_type) => {
+            let size_of = enum_type.byte_size(&ctx.ddbug).unwrap();
+            let bytes = memory::read(ctx.coredump, addr, size_of)?.to_vec();
+
+            let value =
+                get_enum_name(ctx, &enum_type, &bytes).unwrap_or_else(|| "<unknown>".to_owned());
+
+            Ok(format!(
+                "{}{} = {}",
+                ident,
+                enum_type.name().unwrap_or_default(),
+                value
+            ))
+        }
         e => unimplemented!("{:?}", e),
     }
+}
+
+fn get_enum_name<'i, R: gimli::Reader>(
+    ctx: &Context<'i, R>,
+    ty: &ddbug_parser::EnumerationType<'i>,
+    bytes: &[u8],
+) -> Option<String> {
+    for item in ty.enumerators(&ctx.ddbug) {
+        let item_value = item.value().unwrap_or_default();
+        let search = match ty.byte_size(&ctx.ddbug).unwrap() {
+            1 => bytes[0] as i64,
+            4 => i32::from_le_bytes(bytes.try_into().unwrap()) as i64,
+            8 => i64::from_le_bytes(bytes.try_into().unwrap()),
+            n => unimplemented!("size {:?}", n),
+        };
+
+        if item_value == search {
+            return item.clone().name().map(|v| v.to_owned());
+        }
+    }
+
+    None
 }
 
 fn repl(
