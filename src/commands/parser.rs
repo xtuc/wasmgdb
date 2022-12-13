@@ -39,6 +39,13 @@ fn parse_str_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     })(input)
 }
 
+fn parse_int_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
+    map(digit1, |v: &str| {
+        let v = v.parse::<i64>().unwrap();
+        Expr::Int(v)
+    })(input)
+}
+
 fn parse_hex_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
     let hex = preceded(
         alt((tag("0x"), tag("0X"))),
@@ -62,6 +69,7 @@ fn parse_expr<'a>(input: &'a str) -> IResult<&'a str, Expr<'a>> {
         parse_expr_deref,
         parse_hex_expr,
         parse_name_expr,
+        parse_int_expr,
     ))(input)
 }
 
@@ -133,7 +141,14 @@ pub(crate) fn parse_command<'a>(input: &'a str) -> IResult<&'a str, Command<'a>>
         }
         "info" => {
             let (input, what) = preceded(space1, ident)(input)?;
-            (input, Command::Info(what))
+            let (input, arg0) = opt(preceded(space1, parse_expr))(input)?;
+            let args = if let Some(arg0) = arg0 {
+                vec![arg0]
+            } else {
+                vec![]
+            };
+
+            (input, Command::Info(what, args))
         }
         "find" => {
             let start = opt(terminated(parse_expr, tag(", ")));
@@ -253,7 +268,15 @@ mod tests {
         use Command::*;
 
         let (_, cmd) = parse_command("info types").unwrap();
-        assert_eq!(cmd, Info("types"));
+        assert_eq!(cmd, Info("types", vec![]));
+    }
+
+    #[test]
+    fn test_info_symbol() {
+        use Command::*;
+
+        let (_, cmd) = parse_command("info symbol 1234").unwrap();
+        assert_eq!(cmd, Info("symbol", vec![Expr::Int(1234)]));
     }
 
     #[test]

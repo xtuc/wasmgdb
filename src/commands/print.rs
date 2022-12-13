@@ -49,7 +49,7 @@ fn evaluate_expr<'a, 'b>(
     expr_type: Option<ddbug_parser::Type<'a>>,
 ) -> Result<EvaluationResult<'a>, BoxError> {
     match &expr {
-        Expr::Str(_) => {
+        Expr::Int(_) | Expr::Str(_) => {
             unreachable!()
         }
 

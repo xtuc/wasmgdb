@@ -15,6 +15,7 @@ mod print;
 pub(crate) enum Expr<'a> {
     Name(&'a str),
     Hex(u64),
+    Int(i64),
     Deref(Box<Expr<'a>>),
     Cast(&'a str, Box<Expr<'a>>),
     MemberAccess(Box<Expr<'a>>, &'a str),
@@ -24,7 +25,7 @@ pub(crate) enum Expr<'a> {
 impl<'a> Expr<'a> {
     pub(crate) fn object(&'a self) -> Option<&'a str> {
         match self {
-            Expr::Str(_) | Expr::Cast(_, _) | Expr::Hex(_) => None,
+            Expr::Str(_) | Expr::Cast(_, _) | Expr::Hex(_) | Expr::Int(_) => None,
             Expr::Name(n) => Some(n),
             Expr::Deref(t) => t.object(),
             Expr::MemberAccess(o, _) => o.object(),
@@ -35,6 +36,7 @@ impl<'a> Expr<'a> {
 impl<'a> fmt::Display for Expr<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Expr::Int(n) => write!(f, "{}", n),
             Expr::Hex(n) => write!(f, "0x{:x}", n),
             Expr::Name(v) => write!(f, "{}", v),
             Expr::Str(v) => write!(f, "\"{}\"", v),
@@ -53,7 +55,7 @@ pub(crate) enum Command<'a> {
     Print(PrintFormat, Expr<'a>),
     Examine(Expr<'a>, (Option<u32>, Option<PrintFormat>)),
     Find(Option<Expr<'a>>, Option<Expr<'a>>, Expr<'a>),
-    Info(&'a str),
+    Info(&'a str, Vec<Expr<'a>>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -84,8 +86,8 @@ pub(crate) fn run_command<R: gimli::Reader>(
             find::find(&ctx, start, end, expr)?;
         }
 
-        Command::Info(what) => {
-            info::info(&ctx, what)?;
+        Command::Info(what, args) => {
+            info::info(&ctx, what, args)?;
         }
 
         Command::SelectFrame(selected_frame) => {

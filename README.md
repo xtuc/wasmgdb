@@ -68,6 +68,18 @@ Usage:
 
 List all defined types.
 
+#### `info locals`
+
+List local values (includes Wasm func arguments).
+
+#### `info symbol <funcidx>`
+
+Get informations about the function at the given index.
+
+#### `info imports`
+
+List WebAssembly module's imported functions from the host.
+
 ### Expr
 
 - Member access: `<object>-><member>`

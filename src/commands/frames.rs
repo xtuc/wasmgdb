@@ -66,26 +66,6 @@ pub(crate) fn print_frame<'a, R: gimli::Reader>(
                 .join(", ");
 
             format!("{} ({})", name.yellow(), params)
-
-            // if let Some(ref symbol) = found_symbol {
-            //     let name = &symbol.name;
-
-            //     let params = symbol
-            //         .paramuments
-            //         .iter()
-            //         .map(|param| {
-            //             let param_value = match get_param_value(coredump, &symbol, &frame, &param) {
-            //                 Ok(value) => value,
-            //                 Err(err) => format!("<{}>", err),
-            //             };
-            //             format!("{}={}", param.name.green(), param_value)
-            //         })
-            //         .collect::<Vec<String>>()
-            //         .join(", ");
-            //     format!("{} ({}) (base={:?})", name.yellow(), params, symbol.base)
-            // } else {
-            //     format!("{} ()", name.yellow())
-            // }
         };
 
         let addr = format!("{:0>6}", frame.funcidx).blue();
@@ -118,31 +98,5 @@ pub(crate) fn select_frame<R: gimli::Reader>(
             ctx.variables.insert(name.to_owned(), param.clone());
         }
     }
-
-    let params = func
-        .details(&ctx.ddbug)
-        .parameters()
-        .iter()
-        .map(|param| {
-            let param_name = if let Some(name) = param.name() {
-                name
-            } else {
-                "???"
-            };
-
-            let ty = param.ty(&ctx.ddbug).unwrap();
-            let location = param
-                .data_location()
-                .map(|l| format!("{:?}", l))
-                .unwrap_or_else(|| "???".to_owned());
-
-            format!("{}\t=\t {} (location={})", param_name, ty, location)
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
-
-    println!("frame base\t=\t{:?}", func.frame_base());
-    println!("Arguments:\n{}", params);
-
     Ok(())
 }

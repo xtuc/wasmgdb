@@ -37,7 +37,7 @@ pub(crate) fn print_value<R: gimli::Reader>(
             } else {
                 "???".to_owned()
             };
-            Ok(format!("{}*{} = 0x{:x}", ident, target_type, addr))
+            Ok(format!("{}*{} = 0x{:x}", ident, target_type.yellow(), addr))
         }
         ddbug_parser::TypeKind::Base(base_type) => {
             let size_of = base_type.byte_size().unwrap_or(4);
@@ -81,15 +81,9 @@ pub(crate) fn print_value<R: gimli::Reader>(
                         let value = print_value(ctx, addr, member_type.as_ref(), depth)?;
 
                         let ident = "\t".repeat(depth);
+                        let member_name = member.name().unwrap_or_else(|| "<unknown>").green();
 
-                        write!(
-                            out,
-                            "{}{} (0x{:x}): {}\n",
-                            ident,
-                            member.name().unwrap().green(),
-                            addr,
-                            value
-                        )?;
+                        write!(out, "{}{} (0x{:x}): {}\n", ident, member_name, addr, value)?;
                     } else {
                         write!(
                             out,
@@ -186,6 +180,7 @@ fn repl(
     let mut ctx = Context {
         ddbug,
         coredump,
+        source,
         dwarf: Arc::clone(&dwarf),
         selected_frame: None,
         variables: HashMap::new(),
@@ -224,6 +219,9 @@ pub(crate) struct Context<'a, R: gimli::Reader> {
 
     /// DWARF informations
     ddbug: ddbug_parser::FileHash<'a>,
+
+    /// Source Wasm module
+    source: &'a wasm_edit::traverse::WasmModule,
 }
 
 pub fn main() -> Result<(), BoxError> {
