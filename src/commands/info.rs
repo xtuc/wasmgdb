@@ -22,15 +22,15 @@ pub(crate) fn info<'a, R: gimli::Reader>(
         }
 
         "locals" => {
+            let frame = ctx.selected_frame.as_ref().ok_or("no selected frame")?;
+            let func = ctx
+                .ddbug
+                .functions_by_linkage_name
+                .get(&frame.binary_name)
+                .ok_or(format!("function {} not found", frame.binary_name))?;
+
             for (name, param) in &ctx.variables {
                 let ty = param.ty(&ctx.ddbug).unwrap();
-                let frame = ctx.selected_frame.as_ref().ok_or("no selected frame")?;
-
-                let func = ctx
-                    .ddbug
-                    .functions_by_linkage_name
-                    .get(&frame.binary_name)
-                    .ok_or(format!("function {} not found", frame.binary_name))?;
 
                 let addr = memory::get_param_addr(frame, func, &param)?;
                 let value = print_value(ctx, addr, ty.as_ref(), 0)?;

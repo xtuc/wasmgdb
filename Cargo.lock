@@ -413,9 +413,9 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "wasm-edit"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c83b87cb5250e446bd766206b0d2e0a45f60ef1db0199e0ea8ca2bb0f979508"
+checksum = "f8cfeb0d6384a31f7b1f4f429469f1e9dc1e78f5f7aa8dd37aa7f88eb0d92487"
 dependencies = [
  "byteorder",
  "clap",

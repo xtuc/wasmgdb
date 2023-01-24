@@ -11,7 +11,7 @@ repository = "https://github.com/xtuc/wasmgdb"
 
 [dependencies]
 gimli = "0.26.2"
-wasm-edit = { version = "0.1.5" }
+wasm-edit = { version = "0.1.6" }
 colored = "2.0.0"
 env_logger = "0.9.1"
 wasmgdb_ddbug_parser = { path = "../../gimli-rs/ddbug/parser", version = "0.3.1" }
