@@ -47,10 +47,7 @@ pub(crate) fn get_addr<'a>(
                 Err(format!("failed to load base addr in local {}", base_local).into())
             }
         }
-        e => {
-            warn!("implement {:?}", e);
-            Err(format!("get_addr {:?} not implemented", e).into())
-        }
+        e => Err(format!("get_addr {:?} not implemented", e).into()),
     }
 }
 

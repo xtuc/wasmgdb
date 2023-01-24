@@ -146,6 +146,10 @@ fn repl(
     source: &wasm_edit::traverse::WasmModule,
     ddbug: ddbug_parser::FileHash<'_>,
 ) -> Result<(), BoxError> {
+    let coredump_wasm = wasm_edit::parser::decode(&coredump)
+        .map_err(|err| format!("failed to parse Wasm module: {}", err))?;
+    let coredump_wasm = wasm_edit::traverse::WasmModule::new(Arc::new(coredump_wasm));
+
     // Load a section and return as `Cow<[u8]>`.
     let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
         if let Some(bytes) = source.get_custom_section(id.name()) {
@@ -170,13 +174,15 @@ fn repl(
     // Create `EndianSlice`s for all of the sections.
     let dwarf = Arc::new(dwarf_cow.borrow(&borrow_section));
 
-    let stack_frames = coredump::decode_coredump(source, coredump)?;
+    let stack_frames = coredump_wasm
+        .get_custom_section("core0")
+        .ok_or("coredump is empty")?;
+    let stack_frames = coredump::decode_coredump(source, &stack_frames)?;
     if stack_frames.len() == 0 {
         println!("No frames recorded");
     }
 
     // Start REPL
-
     let mut ctx = Context {
         ddbug,
         coredump,
@@ -211,7 +217,7 @@ pub(crate) struct Context<'a, R: gimli::Reader> {
     /// Variables present in the selected scope
     variables: HashMap<String, ddbug_parser::Parameter<'a>>,
 
-    /// Input coredump, ie process memory image.
+    /// Process memory image.
     coredump: &'a [u8],
 
     /// DWARF types

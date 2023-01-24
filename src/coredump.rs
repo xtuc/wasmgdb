@@ -24,7 +24,7 @@ pub(crate) fn decode_coredump(
     let next_frame = u32::from_le_bytes(coredump[addr..addr + 4].try_into().unwrap());
     addr += 4;
 
-    debug!("number of frames: {}", nframe);
+    debug!("number of frames: {}, next_frame: {}", nframe, next_frame);
 
     let mut stack_frames = Vec::with_capacity(nframe as usize);
 
