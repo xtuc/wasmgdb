@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "wasmgdb"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "colored",
  "env_logger",
